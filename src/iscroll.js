@@ -7,6 +7,7 @@ var m = Math,
 	mround = function (r) { return r >> 0; },
 	vendor = (/webkit/i).test(navigator.appVersion) ? 'webkit' :
 		(/firefox/i).test(navigator.userAgent) ? 'Moz' :
+		(/trident/i).test(navigator.userAgent) ? 'ms' :
 		'opera' in window ? 'O' : '',
 
     // Browser capabilities
@@ -14,7 +15,6 @@ var m = Math,
     isIDevice = (/iphone|ipad/gi).test(navigator.appVersion),
     isPlaybook = (/playbook/gi).test(navigator.appVersion),
     isTouchPad = (/hp-tablet/gi).test(navigator.appVersion),
-    isOldIE = (document.all) && !document.getElementsByClassName, // IE < 9.
 
     has3d = 'WebKitCSSMatrix' in window && 'm11' in new WebKitCSSMatrix(),
     hasTouch = 'ontouchstart' in window && !isTouchPad,
@@ -27,7 +27,7 @@ var m = Math,
 			|| window.mozRequestAnimationFrame
 			|| window.oRequestAnimationFrame
 			|| window.msRequestAnimationFrame
-			|| function(callback) { return setTimeout(callback, 1); }
+			|| function(callback) { return setTimeout(callback, 1); };
 	})(),
 	cancelFrame = (function () {
 	    return window.cancelRequestAnimationFrame
@@ -36,7 +36,7 @@ var m = Math,
 			|| window.mozCancelRequestAnimationFrame
 			|| window.oCancelRequestAnimationFrame
 			|| window.msCancelRequestAnimationFrame
-			|| clearTimeout
+			|| clearTimeout;
 	})(),
 
 	// Events
@@ -46,7 +46,6 @@ var m = Math,
 	END_EV = hasTouch ? 'touchend' : 'mouseup',
 	CANCEL_EV = hasTouch ? 'touchcancel' : 'mouseup',
 	WHEEL_EV = vendor == 'Moz' ? 'DOMMouseScroll' : 'mousewheel',
-	MOUSEOUT_EV = document.attachEvent ? 'mouseleave' : 'mouseout',
 
 	// Helpers
 	trnOpen = 'translate' + (has3d ? '3d(' : '('),
@@ -76,6 +75,7 @@ var m = Math,
 			useTransition: false,
 			topOffset: 0,
 			checkDOMChanges: false,		// Experimental
+      handleClick: true,
 
 			// Scrollbar
 			hScrollbar: true,
@@ -98,15 +98,7 @@ var m = Math,
 
 			// Events
 			onRefresh: null,
-			onBeforeScrollStart: function (e) { 
-
-				if (e.preventDefault) {
-					e.preventDefault();
-				} else {
-					e.returnValue = false;
-				}
-				 
-			},
+			onBeforeScrollStart: function (e) { e.preventDefault(); },
 			onScrollStart: null,
 			onBeforeScrollMove: null,
 			onScrollMove: null,
@@ -153,9 +145,6 @@ var m = Math,
 		if (that.options.useTransition) that.options.fixedScrollbar = true;
 
 		that.refresh();
-		
-		// Disable ondragstart (mainly for IE 8).
-		that.scroller.ondragstart = function () { return false; };
 
 		that._bind(RESIZE_EV, window);
 		that._bind(START_EV);
@@ -186,7 +175,7 @@ iScroll.prototype = {
 		var that = this;
 		switch(e.type) {
 			case START_EV:
-				if ((!hasTouch && e.button !== 0 && !isOldIE) || (isOldIE && e.button !== 1)) return;
+				if (!hasTouch && e.button !== 0) return;
 				that._start(e);
 				break;
 			case MOVE_EV: that._move(e); break;
@@ -194,12 +183,10 @@ iScroll.prototype = {
 			case CANCEL_EV: that._end(e); break;
 			case RESIZE_EV: that._resize(); break;
 			case WHEEL_EV: that._wheel(e); break;
-			case MOUSEOUT_EV: that._mouseout(e); break;
+			case 'mouseout': that._mouseout(e); break;
 			case 'webkitTransitionEnd': that._transitionEnd(e); break;
 		}
 	},
-	
-	events : {},
 	
 	_checkDOMChanges: function () {
 		if (this.moved || this.zoomed || this.animating ||
@@ -272,6 +259,8 @@ iScroll.prototype = {
 	},
 	
 	_pos: function (x, y) {
+		if (this.zoomed) return;
+
 		x = this.hScroll ? x : 0;
 		y = this.vScroll ? y : 0;
 
@@ -326,8 +315,6 @@ iScroll.prototype = {
 	_start: function (e) {
 		var that = this,
 			point = hasTouch ? e.touches[0] : e,
-			docBody = document.body,
-			docEl = document.documentElement,
 			matrix, x, y,
 			c1, c2;
 
@@ -366,9 +353,8 @@ iScroll.prototype = {
 				x = matrix[4] * 1;
 				y = matrix[5] * 1;
 			} else {
-				// Use currentStyle if applicable (IE).
-				x = (that.scroller.currentStyle || getComputedStyle(that.scroller, null)).left.replace(/[^0-9-]/g, '') * 1;
-				y = (that.scroller.currentStyle || getComputedStyle(that.scroller, null)).top.replace(/[^0-9-]/g, '') * 1;
+				x = getComputedStyle(that.scroller, null).left.replace(/[^0-9-]/g, '') * 1;
+				y = getComputedStyle(that.scroller, null).top.replace(/[^0-9-]/g, '') * 1;
 			}
 			
 			if (x != that.x || y != that.y) {
@@ -384,11 +370,10 @@ iScroll.prototype = {
 
 		that.startX = that.x;
 		that.startY = that.y;
-		
-		that.pointX = (point.pageX || point.clientX + docBody.scrollLeft + docEl.scrollLeft);
-		that.pointY = (point.pageY || point.clientY + docBody.scrollTop + docEl.scrollTop);
+		that.pointX = point.pageX;
+		that.pointY = point.pageY;
 
-		that.startTime = e.timeStamp || new Date().getTime();
+		that.startTime = e.timeStamp || Date.now();
 
 		if (that.options.onScrollStart) that.options.onScrollStart.call(that, e);
 
@@ -400,14 +385,12 @@ iScroll.prototype = {
 	_move: function (e) {
 		var that = this,
 			point = hasTouch ? e.touches[0] : e,
-			docBody = document.body,
-			docEl = document.documentElement,
-			deltaX = (point.pageX || point.clientX + docBody.scrollLeft + docEl.scrollLeft) - that.pointX,
-			deltaY = (point.pageY || point.clientY + docBody.scrollTop + docEl.scrollTop) - that.pointY,
+			deltaX = point.pageX - that.pointX,
+			deltaY = point.pageY - that.pointY,
 			newX = that.x + deltaX,
 			newY = that.y + deltaY,
 			c1, c2, scale,
-			timestamp = e.timeStamp || new Date().getTime();
+			timestamp = e.timeStamp || Date.now();
 
 		if (that.options.onBeforeScrollMove) that.options.onBeforeScrollMove.call(that, e);
 
@@ -435,8 +418,8 @@ iScroll.prototype = {
 			return;
 		}
 
-		that.pointX = (point.pageX || point.clientX + docBody.scrollLeft + docEl.scrollLeft);
-		that.pointY = (point.pageY || point.clientY + docBody.scrollTop + docEl.scrollTop);
+		that.pointX = point.pageX;
+		that.pointY = point.pageY;
 
 		// Slow down if outside of the boundaries
 		if (newX > 0 || newX < that.maxScrollX) {
@@ -446,12 +429,12 @@ iScroll.prototype = {
 			newY = that.options.bounce ? that.y + (deltaY / 2) : newY >= that.minScrollY || that.maxScrollY >= 0 ? that.minScrollY : that.maxScrollY;
 		}
 
-		if (that.absDistX < 6 && that.absDistY < 6) {
-			that.distX += deltaX;
-			that.distY += deltaY;
-			that.absDistX = m.abs(that.distX);
-			that.absDistY = m.abs(that.distY);
+		that.distX += deltaX;
+		that.distY += deltaY;
+		that.absDistX = m.abs(that.distX);
+		that.absDistY = m.abs(that.distY);
 
+		if (that.absDistX < 6 && that.absDistY < 6) {
 			return;
 		}
 
@@ -488,7 +471,7 @@ iScroll.prototype = {
 			target, ev,
 			momentumX = { dist:0, time:0 },
 			momentumY = { dist:0, time:0 },
-			duration = (e.timeStamp || new Date().getTime()) - that.startTime,
+			duration = (e.timeStamp || Date.now()) - that.startTime,
 			newPosX = that.x,
 			newPosY = that.y,
 			distX, distY,
@@ -535,7 +518,7 @@ iScroll.prototype = {
 							that.options.onZoomEnd.call(that, e);
 						}, 200); // 200 is default zoom duration
 					}
-				} else {
+				} else if (this.options.handleClick) {
 					that.doubleTapTimer = setTimeout(function () {
 						that.doubleTapTimer = null;
 
@@ -648,10 +631,12 @@ iScroll.prototype = {
 		if ('wheelDeltaX' in e) {
 			wheelDeltaX = e.wheelDeltaX / 12;
 			wheelDeltaY = e.wheelDeltaY / 12;
+		} else if('wheelDelta' in e) {
+			wheelDeltaX = wheelDeltaY = e.wheelDelta / 12;
 		} else if ('detail' in e) {
 			wheelDeltaX = wheelDeltaY = -e.detail * 3;
 		} else {
-			wheelDeltaX = wheelDeltaY = -e.wheelDelta;
+			return;
 		}
 		
 		if (that.options.wheelAction == 'zoom') {
@@ -682,8 +667,10 @@ iScroll.prototype = {
 
 		if (deltaY > that.minScrollY) deltaY = that.minScrollY;
 		else if (deltaY < that.maxScrollY) deltaY = that.maxScrollY;
-
-		that.scrollTo(deltaX, deltaY, 0);
+    
+    if(that.maxScrollY < 0){
+		  that.scrollTo(deltaX, deltaY, 0);
+    }
 	},
 	
 	_mouseout: function (e) {
@@ -718,7 +705,7 @@ iScroll.prototype = {
 	_startAni: function () {
 		var that = this,
 			startX = that.x, startY = that.y,
-			startTime = new Date().getTime(),
+			startTime = Date.now(),
 			step, easeOut,
 			animate;
 
@@ -746,7 +733,7 @@ iScroll.prototype = {
 		}
 
 		animate = function () {
-			var now = new Date().getTime(),
+			var now = Date.now(),
 				newX, newY;
 
 			if (now >= startTime + step.time) {
@@ -858,40 +845,11 @@ iScroll.prototype = {
 	},
 
 	_bind: function (type, el, bubble) {
-
-		var fn = this;
-
-		if (document.addEventListener) {
-
-			(el || this.scroller).addEventListener(type, this, !!bubble);
-
-		} else {
-		
-			// Store function so we can detachEvent later.
-			this.events[type] = function(e) {
-				fn.handleEvent.call(fn, e);
-			};
-		
-			(el || this.scroller).attachEvent('on' + type, this.events[type]);
-
-		}
-
+		(el || this.scroller).addEventListener(type, this, !!bubble);
 	},
 
 	_unbind: function (type, el, bubble) {
-		
-		if (document.removeEventListener) {
-
-			(el || this.scroller).removeEventListener(type, this, !!bubble);
-
-		} else {
-
-			if (this.events[type]) {
-				(el || this.scroller).detachEvent('on' + type, this.events[type]);				
-			}
-
-		}
-		
+		(el || this.scroller).removeEventListener(type, this, !!bubble);
 	},
 
 
